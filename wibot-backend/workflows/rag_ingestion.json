@@ -1,0 +1,291 @@
+{
+  "name": "RAG Ingestion",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "e990b93e-2c30-45d5-9af8-e5f19994e570",
+      "name": "Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "TRUNCATE TABLE n8n_vectors; SELECT 0 as count;",
+        "options": {}
+      },
+      "id": "048b2d33-4c10-489b-99f0-74489e9ce373",
+      "name": "Clear and Check",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        224,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "OLIR53Szrqirze2J",
+          "name": "WIBOT PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Liste des documents a ingerer (chemins Docker)\nconst documents = [\n  {\n    path: '/home/node/.n8n-files/rag-test-kit/procedures/PROC_001_Panne_Internet.md',\n    category: 'procedure',\n    tags: ['reseau', 'internet', 'fai', 'phibee', 'diagnostic']\n  },\n  {\n    path: '/home/node/.n8n-files/rag-test-kit/procedures/PROC_002_Reset_Password_AD.md',\n    category: 'procedure',\n    tags: ['active-directory', 'mot-de-passe', 'reset', 'utilisateur']\n  },\n  {\n    path: '/home/node/.n8n-files/rag-test-kit/procedures/PROC_003_Imprimante_Reseau.md',\n    category: 'procedure',\n    tags: ['imprimante', 'reseau', 'impression', 'materiel']\n  },\n  {\n    path: '/home/node/.n8n-files/rag-test-kit/clients/CLIENT_EHPAD_Music_Art.md',\n    category: 'client',\n    tags: ['ehpad', 'paris', 'netsoins', 'orange']\n  },\n  {\n    path: '/home/node/.n8n-files/rag-test-kit/clients/CLIENT_Clinique_Saint_Joseph.md',\n    category: 'client',\n    tags: ['clinique', 'lyon', 'hds', 'citrix', 'imagerie']\n  },\n  {\n    path: '/home/node/.n8n-files/rag-test-kit/tickets/TICKETS_Resolus_2024.md',\n    category: 'ticket',\n    tags: ['ticket', 'resolu', 'historique', '2024']\n  },\n  {\n    path: '/home/node/.n8n-files/rag-test-kit/documentation/DOC_Technique_WIDIP.md',\n    category: 'documentation',\n    tags: ['technique', 'commandes', 'reseau', 'diagnostic']\n  }\n];\n\nreturn documents.map(doc => ({ json: doc }));"
+      },
+      "id": "203bc64a-40a8-4305-829e-e5397e6c84ba",
+      "name": "List Documents",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "fileSelector": "={{ $json.path }}",
+        "options": {}
+      },
+      "id": "a26c5e6b-4116-4069-a43a-cc25cebbcac8",
+      "name": "Read File",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        672,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Traiter tous les fichiers avec la bonne méthode n8n\nconst items = $input.all();\nconst results = [];\n\nfor (let i = 0; i < items.length; i++) {\n  const item = items[i];\n  \n  // Utiliser la méthode n8n pour récupérer le contenu binaire\n  const binaryData = await this.helpers.getBinaryDataBuffer(i, 'data');\n  const text = binaryData.toString('utf-8');\n  \n  // Recuperer les infos depuis List Documents\n  const docInfo = $('List Documents').all()[i]?.json || {};\n  const path = docInfo.path || 'unknown';\n  const category = docInfo.category || 'general';\n  const tags = docInfo.tags || [];\n  const filename = path.split('/').pop();\n  \n  results.push({\n    json: {\n      content: text,\n      source: filename,\n      category: category,\n      tags: JSON.stringify(tags),\n      path: path\n    }\n  });\n}\n\nreturn results;"
+      },
+      "id": "7c77bb4e-82eb-4941-8210-b4d63d7c6ed0",
+      "name": "Prepare Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "f3bbbbf5-9622-4b18-a8dc-62d5718dc761",
+      "name": "Mistral Embeddings",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsMistralCloud",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        224
+      ],
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "aoJtaXmparXvnYMd",
+          "name": "Mistral API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonMode": "expressionData",
+        "jsonData": "={{ $json.content }}",
+        "options": {
+          "metadata": {
+            "metadataValues": [
+              {
+                "name": "source",
+                "value": "={{ $json.source }}"
+              },
+              {
+                "name": "category",
+                "value": "={{ $json.category }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "70fed0c6-179f-4d46-bf26-f18946db7528",
+      "name": "Default Data Loader",
+      "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+      "typeVersion": 1,
+      "position": [
+        1248,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "insert",
+        "options": {}
+      },
+      "id": "4e2a1b23-65de-4cc6-bd29-e98d9d37096a",
+      "name": "PGVector Store",
+      "type": "@n8n/n8n-nodes-langchain.vectorStorePGVector",
+      "typeVersion": 1,
+      "position": [
+        1152,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "OLIR53Szrqirze2J",
+          "name": "WIBOT PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COUNT(*) as total_documents FROM n8n_vectors;",
+        "options": {}
+      },
+      "id": "103cfa46-3ffa-4ebf-b85c-684850f57fbe",
+      "name": "Final Stats",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1616,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "OLIR53Szrqirze2J",
+          "name": "WIBOT PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chunkOverlap": 200,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.textSplitterRecursiveCharacterTextSplitter",
+      "typeVersion": 1,
+      "position": [
+        1328,
+        432
+      ],
+      "id": "517085e9-4a39-4577-8c64-9d550b09487c",
+      "name": "Recursive Character Text Splitter"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Clear and Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clear and Check": {
+      "main": [
+        [
+          {
+            "node": "List Documents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Documents": {
+      "main": [
+        [
+          {
+            "node": "Read File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read File": {
+      "main": [
+        [
+          {
+            "node": "Prepare Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mistral Embeddings": {
+      "ai_embedding": [
+        [
+          {
+            "node": "PGVector Store",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PGVector Store": {
+      "main": [
+        [
+          {
+            "node": "Final Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Default Data Loader": {
+      "ai_document": [
+        [
+          {
+            "node": "PGVector Store",
+            "type": "ai_document",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Content": {
+      "main": [
+        [
+          {
+            "node": "PGVector Store",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recursive Character Text Splitter": {
+      "ai_textSplitter": [
+        [
+          {
+            "node": "Default Data Loader",
+            "type": "ai_textSplitter",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "62df567a-2357-4350-92dd-bf6e2f6a98ec",
+  "meta": {
+    "instanceId": "fea405d08059f6456eb869810813e4a53c89bf16edccc4c93e0b0f95abe6758e"
+  },
+  "id": "GGI5mRIghPNmSiDO",
+  "tags": []
+}

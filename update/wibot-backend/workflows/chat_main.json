@@ -1,0 +1,861 @@
+{
+  "name": "WIBOT - Chat Main",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "wibot/chat",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-chat",
+      "name": "Webhook Chat",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "webhookId": "wibot-chat"
+    },
+    {
+      "parameters": {
+        "jsCode": "const authHeader = $input.first().json.headers.authorization;\nconst body = $input.first().json.body;\n\nif (!authHeader || !authHeader.startsWith('Bearer ')) {\n  return [{ json: { valid: false, error: 'No token provided' } }];\n}\n\nconst token = authHeader.substring(7);\nconst parts = token.split('.');\n\nif (parts.length !== 3) {\n  return [{ json: { valid: false, error: 'Invalid token format' } }];\n}\n\ntry {\n  const payload = parts[1];\n  const decoded = JSON.parse(Buffer.from(payload, 'base64').toString());\n  \n  if (decoded.exp && decoded.exp < Math.floor(Date.now() / 1000)) {\n    return [{ json: { valid: false, error: 'Token expired' } }];\n  }\n  \n  // Recuperer le mode (code, flash, redaction) - defaut: flash\n  const mode = body.mode || 'flash';\n  \n  return [{ \n    json: { \n      valid: true, \n      user: decoded,\n      userId: decoded.userId,\n      conversationId: body.conversation_id,\n      message: body.message,\n      mode: mode,\n      sessionId: `${decoded.userId}_${body.conversation_id}`\n    } \n  }];\n} catch (err) {\n  return [{ json: { valid: false, error: 'Invalid token' } }];\n}"
+      },
+      "id": "verify-jwt",
+      "name": "Verify JWT",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [470, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-jwt-valid",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-jwt-valid",
+      "name": "JWT Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [690, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": false,\n  \"error\": \"{{ $json.error }}\"\n}",
+        "options": {
+          "responseCode": 401,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "respond-unauthorized",
+      "name": "Unauthorized",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [910, 550]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  COALESCE(used_tokens, 0) as used_tokens,\n  COALESCE(quota_tokens, 50000) as quota_tokens\nFROM user_token_usage\nWHERE user_id = {{ $json.userId }}\n  AND month = DATE_TRUNC('month', CURRENT_DATE)\nLIMIT 1;",
+        "options": {}
+      },
+      "id": "check-quota",
+      "name": "Check Quota",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [910, 300],
+      "credentials": {
+        "postgres": {
+          "id": "1",
+          "name": "WIBOT PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all();\nconst jwtData = $('Verify JWT').first().json;\n\nlet usedTokens = 0;\nlet quotaTokens = 50000;\n\nif (rows && rows.length > 0 && rows[0].json.used_tokens !== undefined) {\n  usedTokens = parseInt(rows[0].json.used_tokens) || 0;\n  quotaTokens = parseInt(rows[0].json.quota_tokens) || 50000;\n}\n\nconst quotaExceeded = usedTokens >= quotaTokens;\n\nreturn [{\n  json: {\n    ...jwtData,\n    usedTokens,\n    quotaTokens,\n    quotaExceeded\n  }\n}];"
+      },
+      "id": "prepare-quota",
+      "name": "Prepare Quota",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1130, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-quota-ok",
+              "leftValue": "={{ $json.quotaExceeded }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-quota-ok",
+      "name": "Quota OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1350, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": false,\n  \"error\": \"Quota tokens mensuel depasse. Limite : 50,000 tokens/mois.\",\n  \"code\": \"QUOTA_EXCEEDED\"\n}",
+        "options": {
+          "responseCode": 429,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "respond-quota-exceeded",
+      "name": "Quota Exceeded",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1570, 550]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.mode }}",
+                    "rightValue": "code",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "code"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.mode }}",
+                    "rightValue": "flash",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "flash"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.mode }}",
+                    "rightValue": "redaction",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "redaction"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "id": "mode-switch",
+      "name": "Mode Switch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [1570, 300]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.message }}",
+        "options": {
+          "systemMessage": "Tu es WIBOT, l'assistant IA interne de WIDIP, specialise dans le developpement de code.\n\nTon role:\n- Aider les developpeurs WIDIP avec leurs questions de code\n- Ecrire du code propre, bien commente et maintenable\n- Utiliser le francais pour les explications\n- Fournir des exemples de code clairs\n\nStyle:\n- Utilise le markdown avec des blocs de code\n- Specifie toujours le langage dans les blocs de code\n- Explique la logique derriere le code\n- Propose des ameliorations si pertinent"
+        }
+      },
+      "id": "ai-agent-code",
+      "name": "AI Agent Code",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [1790, 100]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.message }}",
+        "options": {
+          "systemMessage": "Tu es WIBOT, l'assistant IA interne de WIDIP.\n\nTon role:\n- Repondre rapidement aux questions simples\n- Fournir des reponses concises et directes\n- Utiliser le francais par defaut\n\nStyle:\n- Sois bref et efficace\n- Va droit au but\n- Utilise le markdown si necessaire"
+        }
+      },
+      "id": "ai-agent-flash",
+      "name": "AI Agent Flash",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [1790, 300]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.message }}",
+        "options": {
+          "systemMessage": "Tu es WIBOT, l'assistant IA premium de WIDIP, specialise dans la redaction de haute qualite.\n\nTon role:\n- Produire des textes professionnels de haute qualite\n- Rediger des documents, rapports, emails professionnels\n- Analyser des problemes complexes en profondeur\n- Utiliser le francais avec un style soigne\n\nStyle:\n- Reponses detaillees et bien structurees\n- Utilise le markdown pour la mise en forme\n- Qualite d'ecriture professionnelle\n- Analyse approfondie des sujets"
+        }
+      },
+      "id": "ai-agent-redaction",
+      "name": "AI Agent Pro",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [1790, 500]
+    },
+    {
+      "parameters": {
+        "model": "devstral-small-latest",
+        "options": {
+          "maxTokens": 4096,
+          "temperature": 0.3
+        }
+      },
+      "id": "model-code",
+      "name": "Devstral Code",
+      "type": "@n8n/n8n-nodes-langchain.lmChatMistralCloud",
+      "typeVersion": 1,
+      "position": [1600, 0],
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "3",
+          "name": "Mistral API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "devstral-small-latest",
+        "options": {
+          "maxTokens": 2048,
+          "temperature": 0.5
+        }
+      },
+      "id": "model-flash",
+      "name": "Devstral Small",
+      "type": "@n8n/n8n-nodes-langchain.lmChatMistralCloud",
+      "typeVersion": 1,
+      "position": [1600, 200],
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "3",
+          "name": "Mistral API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "mistral-large-latest",
+        "options": {
+          "maxTokens": 4096,
+          "temperature": 0.7
+        }
+      },
+      "id": "model-redaction",
+      "name": "Mistral Large",
+      "type": "@n8n/n8n-nodes-langchain.lmChatMistralCloud",
+      "typeVersion": 1,
+      "position": [1600, 400],
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "3",
+          "name": "Mistral API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Verify JWT').first().json.sessionId }}",
+        "tableName": "n8n_chat_histories",
+        "contextWindowLength": 10
+      },
+      "id": "postgres-memory-code",
+      "name": "Memory Code",
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [1790, 0],
+      "credentials": {
+        "postgres": {
+          "id": "1",
+          "name": "WIBOT PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "retrieve-as-tool",
+        "toolName": "knowledge_base",
+        "toolDescription": "Recherche dans la base de connaissances WIDIP. Utilise cet outil pour trouver des informations sur les procedures, clients, tickets resolus et documentation technique.",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.vectorStorePGVector",
+      "typeVersion": 1.3,
+      "position": [1980, 0],
+      "id": "pgvector-store-code",
+      "name": "PGVector Store Code",
+      "credentials": {
+        "postgres": {
+          "id": "1",
+          "name": "WIBOT PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.embeddingsMistralCloud",
+      "typeVersion": 1,
+      "position": [1980, 140],
+      "id": "embeddings-mistral-code",
+      "name": "Embeddings Mistral Code",
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "3",
+          "name": "Mistral API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Verify JWT').first().json.sessionId }}",
+        "tableName": "n8n_chat_histories",
+        "contextWindowLength": 10
+      },
+      "id": "postgres-memory-flash",
+      "name": "Memory Flash",
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [1790, 200],
+      "credentials": {
+        "postgres": {
+          "id": "1",
+          "name": "WIBOT PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Verify JWT').first().json.sessionId }}",
+        "tableName": "n8n_chat_histories",
+        "contextWindowLength": 10
+      },
+      "id": "postgres-memory-redaction",
+      "name": "Memory Pro",
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [1790, 400],
+      "credentials": {
+        "postgres": {
+          "id": "1",
+          "name": "WIBOT PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const agentResponse = $input.first().json.output;\nconst jwtData = $('Prepare Quota').first().json;\n\n// Estimation tokens (environ 4 chars par token)\nconst messageTokens = Math.ceil(jwtData.message.length / 4);\nconst responseTokens = Math.ceil(agentResponse.length / 4);\nconst tokensUsed = messageTokens + responseTokens;\n\nconst newUsedTokens = jwtData.usedTokens + tokensUsed;\nconst tokensRemaining = jwtData.quotaTokens - newUsedTokens;\n\nreturn [{\n  json: {\n    userId: jwtData.userId,\n    conversationId: jwtData.conversationId,\n    message: jwtData.message,\n    response: agentResponse,\n    tokensUsed,\n    newUsedTokens,\n    tokensRemaining: Math.max(0, tokensRemaining),\n    quotaTokens: jwtData.quotaTokens\n  }\n}];"
+      },
+      "id": "prepare-save",
+      "name": "Prepare Save",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2010, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO conversations (conversation_id, user_id, title, created_at, updated_at)\nVALUES (\n  '{{ $json.conversationId }}'::uuid,\n  {{ $json.userId }},\n  '{{ $json.message.substring(0, 50).replace(/'/g, \"''\") }}',\n  NOW(),\n  NOW()\n)\nON CONFLICT (conversation_id)\nDO UPDATE SET updated_at = NOW();",
+        "options": {}
+      },
+      "id": "upsert-conversation",
+      "name": "UPSERT Conversation",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2230, 300],
+      "credentials": {
+        "postgres": {
+          "id": "1",
+          "name": "WIBOT PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO messages (conversation_id, user_id, role, content, tokens, created_at)\nVALUES (\n  '{{ $('Prepare Save').first().json.conversationId }}'::uuid,\n  {{ $('Prepare Save').first().json.userId }},\n  'user',\n  '{{ $('Prepare Save').first().json.message.replace(/'/g, \"''\").replace(/\\\\/g, '\\\\\\\\') }}',\n  {{ Math.ceil($('Prepare Save').first().json.message.length / 4) }},\n  NOW()\n);",
+        "options": {}
+      },
+      "id": "insert-user-message",
+      "name": "INSERT User Message",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2450, 300],
+      "credentials": {
+        "postgres": {
+          "id": "1",
+          "name": "WIBOT PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO messages (conversation_id, user_id, role, content, tokens, created_at)\nVALUES (\n  '{{ $('Prepare Save').first().json.conversationId }}'::uuid,\n  {{ $('Prepare Save').first().json.userId }},\n  'assistant',\n  '{{ $('Prepare Save').first().json.response.replace(/'/g, \"''\").replace(/\\\\/g, '\\\\\\\\') }}',\n  {{ Math.ceil($('Prepare Save').first().json.response.length / 4) }},\n  NOW()\n);",
+        "options": {}
+      },
+      "id": "insert-assistant-message",
+      "name": "INSERT Assistant Message",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2670, 300],
+      "credentials": {
+        "postgres": {
+          "id": "1",
+          "name": "WIBOT PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO user_token_usage (user_id, month, used_tokens, quota_tokens)\nVALUES (\n  {{ $('Prepare Save').first().json.userId }},\n  DATE_TRUNC('month', CURRENT_DATE),\n  {{ $('Prepare Save').first().json.tokensUsed }},\n  50000\n)\nON CONFLICT (user_id, month)\nDO UPDATE SET used_tokens = user_token_usage.used_tokens + {{ $('Prepare Save').first().json.tokensUsed }};",
+        "options": {}
+      },
+      "id": "update-tokens",
+      "name": "UPDATE Token Usage",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2890, 300],
+      "credentials": {
+        "postgres": {
+          "id": "1",
+          "name": "WIBOT PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $('Prepare Save').first().json;\n\nreturn [{\n  json: {\n    success: true,\n    response: data.response,\n    tokens_used: data.tokensUsed,\n    tokens_remaining: data.tokensRemaining,\n    conversation_id: data.conversationId\n  }\n}];"
+      },
+      "id": "format-response",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3110, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "respond-success",
+      "name": "Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [3330, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Chat": {
+      "main": [
+        [
+          {
+            "node": "Verify JWT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify JWT": {
+      "main": [
+        [
+          {
+            "node": "JWT Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "JWT Valid?": {
+      "main": [
+        [
+          {
+            "node": "Check Quota",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Unauthorized",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Quota": {
+      "main": [
+        [
+          {
+            "node": "Prepare Quota",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Quota": {
+      "main": [
+        [
+          {
+            "node": "Quota OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quota OK?": {
+      "main": [
+        [
+          {
+            "node": "Mode Switch",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Quota Exceeded",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mode Switch": {
+      "main": [
+        [
+          {
+            "node": "AI Agent Code",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Agent Flash",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Agent Pro",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Agent Flash",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Devstral Code": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent Code",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Memory Code": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent Code",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PGVector Store Code": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent Code",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings Mistral Code": {
+      "ai_embedding": [
+        [
+          {
+            "node": "PGVector Store Code",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Devstral Small": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent Flash",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Memory Flash": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent Flash",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mistral Large": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent Pro",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Memory Pro": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent Pro",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent Code": {
+      "main": [
+        [
+          {
+            "node": "Prepare Save",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent Flash": {
+      "main": [
+        [
+          {
+            "node": "Prepare Save",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent Pro": {
+      "main": [
+        [
+          {
+            "node": "Prepare Save",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Save": {
+      "main": [
+        [
+          {
+            "node": "UPSERT Conversation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "UPSERT Conversation": {
+      "main": [
+        [
+          {
+            "node": "INSERT User Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "INSERT User Message": {
+      "main": [
+        [
+          {
+            "node": "INSERT Assistant Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "INSERT Assistant Message": {
+      "main": [
+        [
+          {
+            "node": "UPDATE Token Usage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "UPDATE Token Usage": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Response": {
+      "main": [
+        [
+          {
+            "node": "Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "WIBOT"
+    }
+  ],
+  "triggerCount": 1,
+  "pinData": {}
+}

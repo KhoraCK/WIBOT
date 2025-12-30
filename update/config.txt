@@ -1,0 +1,75 @@
+# ============================================================================
+#
+#   ██╗    ██╗██╗██████╗  ██████╗ ████████╗
+#   ██║    ██║██║██╔══██╗██╔═══██╗╚══██╔══╝
+#   ██║ █╗ ██║██║██████╔╝██║   ██║   ██║
+#   ██║███╗██║██║██╔══██╗██║   ██║   ██║
+#   ╚███╔███╔╝██║██████╔╝╚██████╔╝   ██║
+#    ╚══╝╚══╝ ╚═╝╚═════╝  ╚═════╝    ╚═╝
+#
+#   FICHIER DE CONFIGURATION
+#   Version: 2.0
+#
+# ============================================================================
+#
+#   INSTRUCTIONS:
+#   =============
+#
+#   1. Remplis les valeurs ci-dessous (remplace les valeurs entre < >)
+#   2. Sauvegarde ce fichier
+#   3. Lance le script d'installation:
+#      - Windows: Double-clic sur INSTALL_WINDOWS.bat
+#      - Linux:   sudo ./INSTALL_LINUX.sh
+#
+#   IMPORTANT: Ne supprime pas les lignes, modifie seulement les valeurs!
+#
+# ============================================================================
+
+# ============================================================================
+# CLE API MISTRAL (OBLIGATOIRE)
+# ============================================================================
+# Obtiens ta cle sur: https://console.mistral.ai/api-keys
+# Elle ressemble a: LH0hs7MxTDGx6z2ioHC8oyrFnGHcbywL
+
+MISTRAL_API_KEY=LH0hs7MxTDGx6z2ioHC8oyrFnGHcbywL
+
+# ============================================================================
+# CONFIGURATION N8N (Interface d'administration)
+# ============================================================================
+# Ces identifiants servent a acceder a l'interface n8n
+# Tu peux les personnaliser ou garder les valeurs par defaut
+
+N8N_USER=admin
+N8N_PASSWORD=wibot_admin_2024
+
+# ============================================================================
+# CONFIGURATION POSTGRESQL (Base de donnees)
+# ============================================================================
+# Tu peux personnaliser ou garder les valeurs par defaut
+# Ces identifiants sont utilises en interne par WIBOT
+
+POSTGRES_USER=widip
+POSTGRES_PASSWORD=widip_secure_password_2024
+POSTGRES_DB=wibot
+
+# ============================================================================
+# CONFIGURATION AVANCEE (Optionnel - pour experts)
+# ============================================================================
+# Ne modifie ces valeurs que si tu sais ce que tu fais
+
+# Port pour l'interface WIBOT (par defaut: 8080)
+WIBOT_PORT=8080
+
+# Port pour l'interface n8n (par defaut: 5679)
+N8N_PORT=5679
+
+# Port PostgreSQL externe (par defaut: 5433)
+POSTGRES_PORT=5433
+
+# Secret JWT (min 32 caracteres) - pour la securite des sessions
+JWT_SECRET=wibot_jwt_secret_key_minimum_32_chars_2024
+
+# ============================================================================
+# FIN DE LA CONFIGURATION
+# ============================================================================
+# Tu peux maintenant lancer le script d'installation!
