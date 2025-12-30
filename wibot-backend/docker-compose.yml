@@ -1,9 +1,9 @@
 services:
   # ===========================================
-  # PostgreSQL - Base de données
+  # PostgreSQL - Base de données avec pgvector
   # ===========================================
   postgres:
-    image: postgres:14-alpine
+    image: pgvector/pgvector:pg14
     container_name: wibot-postgres
     restart: unless-stopped
     environment:
@@ -64,6 +64,7 @@ services:
     volumes:
       - n8n_data:/home/node/.n8n
       - ./workflows:/home/node/workflows:ro
+      - ./rag-documents:/home/node/.n8n-files/rag-documents
     ports:
       - "5679:5678"
     depends_on:

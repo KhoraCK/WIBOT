@@ -5,9 +5,10 @@
 -- lancement de PostgreSQL via docker-entrypoint-initdb.d
 
 -- ===========================================
--- Extension UUID
+-- Extensions
 -- ===========================================
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS vector;  -- Pour pgvector (RAG embeddings)
 
 -- ===========================================
 -- TABLE: users
