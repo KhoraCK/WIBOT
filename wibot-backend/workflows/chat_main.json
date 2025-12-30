@@ -1,0 +1,1070 @@
+{
+  "name": "WIBOT - Chat Main",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "wibot/chat",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "14492231-1b9c-43bd-aceb-415139cd4659",
+      "name": "Webhook Chat",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1344,
+        1024
+      ],
+      "webhookId": "wibot-chat"
+    },
+    {
+      "parameters": {
+        "jsCode": "const authHeader = $input.first().json.headers.authorization;\nconst body = $input.first().json.body;\n\nif (!authHeader || !authHeader.startsWith('Bearer ')) {\n  return [{ json: { valid: false, error: 'No token provided' } }];\n}\n\nconst token = authHeader.substring(7);\nconst parts = token.split('.');\n\nif (parts.length !== 3) {\n  return [{ json: { valid: false, error: 'Invalid token format' } }];\n}\n\ntry {\n  const payload = parts[1];\n  const decoded = JSON.parse(Buffer.from(payload, 'base64').toString());\n  \n  if (decoded.exp && decoded.exp < Math.floor(Date.now() / 1000)) {\n    return [{ json: { valid: false, error: 'Token expired' } }];\n  }\n  \n  // Recuperer le mode (code, flash, redaction) - defaut: flash\n  const mode = body.mode || 'flash';\n  \n  return [{ \n    json: { \n      valid: true, \n      user: decoded,\n      userId: decoded.userId,\n      conversationId: body.conversation_id,\n      message: body.message,\n      mode: mode,\n      sessionId: `${decoded.userId}_${body.conversation_id}`\n    } \n  }];\n} catch (err) {\n  return [{ json: { valid: false, error: 'Invalid token' } }];\n}"
+      },
+      "id": "503b6357-4e37-4e80-8597-dca9316f2ccf",
+      "name": "Verify JWT",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1120,
+        1024
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-jwt-valid",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "9a533c13-9502-4d87-9d4e-62ec1b355604",
+      "name": "JWT Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -896,
+        1024
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": false,\n  \"error\": \"{{ $json.error }}\"\n}",
+        "options": {
+          "responseCode": 401,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "ce9b5e59-f424-40fe-89eb-df4f9b87868e",
+      "name": "Unauthorized",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        -672,
+        1120
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  COALESCE(used_tokens, 0) as used_tokens,\n  COALESCE(quota_tokens, 50000) as quota_tokens\nFROM user_token_usage\nWHERE user_id = {{ $json.userId }}\n  AND month = DATE_TRUNC('month', CURRENT_DATE)\nLIMIT 1;",
+        "options": {}
+      },
+      "id": "90c5882b-702f-42cc-9fd6-1e958efcf2dc",
+      "name": "Check Quota",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -672,
+        928
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "OLIR53Szrqirze2J",
+          "name": "WIBOT PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all();\nconst jwtData = $('Verify JWT').first().json;\n\nlet usedTokens = 0;\nlet quotaTokens = 50000;\n\nif (rows && rows.length > 0 && rows[0].json.used_tokens !== undefined) {\n  usedTokens = parseInt(rows[0].json.used_tokens) || 0;\n  quotaTokens = parseInt(rows[0].json.quota_tokens) || 50000;\n}\n\nconst quotaExceeded = usedTokens >= quotaTokens;\n\nreturn [{\n  json: {\n    ...jwtData,\n    usedTokens,\n    quotaTokens,\n    quotaExceeded\n  }\n}];"
+      },
+      "id": "f31d922a-1942-4879-a932-f677f4ed4d91",
+      "name": "Prepare Quota",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -448,
+        928
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-quota-ok",
+              "leftValue": "={{ $json.quotaExceeded }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b8b85577-382a-4922-903a-1e6d64546d5c",
+      "name": "Quota OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        928
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": false,\n  \"error\": \"Quota tokens mensuel depasse. Limite : 50,000 tokens/mois.\",\n  \"code\": \"QUOTA_EXCEEDED\"\n}",
+        "options": {
+          "responseCode": 429,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "f1adade9-19e0-4cd3-b6bf-aa3d8b66eeda",
+      "name": "Quota Exceeded",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        1040
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.mode }}",
+                    "rightValue": "code",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "code"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.mode }}",
+                    "rightValue": "flash",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "flash"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.mode }}",
+                    "rightValue": "redaction",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "redaction"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "id": "b9c61ff3-f138-4ca2-9f5b-c6f67f2e5f95",
+      "name": "Mode Switch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        0,
+        784
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.message }}",
+        "options": {
+          "systemMessage": "Tu es WIBOT, l'assistant IA interne de WIDIP, specialise dans le developpement de code.\n\nTon role:\n- Aider les developpeurs WIDIP avec leurs questions de code\n- Ecrire du code propre, bien commente et maintenable\n- Utiliser le francais pour les explications\n- Fournir des exemples de code clairs\n\nStyle:\n- Utilise le markdown avec des blocs de code\n- Specifie toujours le langage dans les blocs de code\n- Explique la logique derriere le code\n- Propose des ameliorations si pertinent"
+        }
+      },
+      "id": "50d2799f-1a91-4283-8490-b2f80becfd80",
+      "name": "AI Agent Code",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        288,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.message }}",
+        "options": {
+          "systemMessage": "Tu es WIBOT, l'assistant IA interne de WIDIP.\n\nTon role:\n- Repondre rapidement aux questions simples\n- Fournir des reponses concises et directes\n- Utiliser le francais par defaut\n\nStyle:\n- Sois bref et efficace\n- Va droit au but\n- Utilise le markdown si necessaire"
+        }
+      },
+      "id": "25714576-6c9a-4165-bb4c-29b7ce5e2d16",
+      "name": "AI Agent Flash",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        288,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.message }}",
+        "options": {
+          "systemMessage": "Tu es WIBOT, l'assistant IA premium de WIDIP, specialise dans la redaction de haute qualite.\n\nTon role:\n- Produire des textes professionnels de haute qualite\n- Rediger des documents, rapports, emails professionnels\n- Analyser des problemes complexes en profondeur\n- Utiliser le francais avec un style soigne\n\nStyle:\n- Reponses detaillees et bien structurees\n- Utilise le markdown pour la mise en forme\n- Qualite d'ecriture professionnelle\n- Analyse approfondie des sujets"
+        }
+      },
+      "id": "554c9854-4d8b-438a-9296-a6e453b0c417",
+      "name": "AI Agent Pro",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        288,
+        1424
+      ]
+    },
+    {
+      "parameters": {
+        "model": "devstral-small-latest",
+        "options": {
+          "maxTokens": 4096,
+          "temperature": 0.3
+        }
+      },
+      "id": "f9a4bc5f-605c-46b4-aee3-e73f94321f15",
+      "name": "Devstral Code",
+      "type": "@n8n/n8n-nodes-langchain.lmChatMistralCloud",
+      "typeVersion": 1,
+      "position": [
+        224,
+        224
+      ],
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "aoJtaXmparXvnYMd",
+          "name": "Mistral API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "devstral-small-latest",
+        "options": {
+          "maxTokens": 2048,
+          "temperature": 0.5
+        }
+      },
+      "id": "c361e013-4767-432e-89b5-a0f377f4281b",
+      "name": "Devstral Small",
+      "type": "@n8n/n8n-nodes-langchain.lmChatMistralCloud",
+      "typeVersion": 1,
+      "position": [
+        224,
+        832
+      ],
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "aoJtaXmparXvnYMd",
+          "name": "Mistral API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "mistral-large-latest",
+        "options": {
+          "maxTokens": 10000,
+          "temperature": 0.7
+        }
+      },
+      "id": "e2daa8df-b6dd-435d-9c24-28dd003384e9",
+      "name": "Mistral Large",
+      "type": "@n8n/n8n-nodes-langchain.lmChatMistralCloud",
+      "typeVersion": 1,
+      "position": [
+        224,
+        1648
+      ],
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "aoJtaXmparXvnYMd",
+          "name": "Mistral API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Verify JWT').first().json.sessionId }}",
+        "contextWindowLength": 10
+      },
+      "id": "f6e8e84d-abc7-40d5-85bd-5619e98e1e54",
+      "name": "Memory Code",
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [
+        352,
+        224
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "OLIR53Szrqirze2J",
+          "name": "WIBOT PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Verify JWT').first().json.sessionId }}",
+        "contextWindowLength": 10
+      },
+      "id": "e25556fb-fac2-42d1-b4e6-6b396eba1b0f",
+      "name": "Memory Flash",
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [
+        352,
+        832
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "OLIR53Szrqirze2J",
+          "name": "WIBOT PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Verify JWT').first().json.sessionId }}",
+        "contextWindowLength": 10
+      },
+      "id": "661fb06e-8438-43c9-95ed-04fb4f47c78e",
+      "name": "Memory Pro",
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [
+        352,
+        1648
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "OLIR53Szrqirze2J",
+          "name": "WIBOT PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const agentResponse = $input.first().json.output;\nconst jwtData = $('Prepare Quota').first().json;\n\n// Estimation tokens (environ 4 chars par token)\nconst messageTokens = Math.ceil(jwtData.message.length / 4);\nconst responseTokens = Math.ceil(agentResponse.length / 4);\nconst tokensUsed = messageTokens + responseTokens;\n\nconst newUsedTokens = jwtData.usedTokens + tokensUsed;\nconst tokensRemaining = jwtData.quotaTokens - newUsedTokens;\n\nreturn [{\n  json: {\n    userId: jwtData.userId,\n    conversationId: jwtData.conversationId,\n    message: jwtData.message,\n    response: agentResponse,\n    tokensUsed,\n    newUsedTokens,\n    tokensRemaining: Math.max(0, tokensRemaining),\n    quotaTokens: jwtData.quotaTokens\n  }\n}];"
+      },
+      "id": "fdcd3535-5ce0-42e7-91b1-d2a70153c598",
+      "name": "Prepare Save",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        848,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO conversations (conversation_id, user_id, title, created_at, updated_at)\nVALUES (\n  '{{ $json.conversationId }}'::uuid,\n  {{ $json.userId }},\n  '{{ $json.message.substring(0, 50).replace(/'/g, \"''\") }}',\n  NOW(),\n  NOW()\n)\nON CONFLICT (conversation_id)\nDO UPDATE SET updated_at = NOW();",
+        "options": {}
+      },
+      "id": "493cdf8c-447d-44fd-9e9d-7a80239da96f",
+      "name": "UPSERT Conversation",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1072,
+        608
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "OLIR53Szrqirze2J",
+          "name": "WIBOT PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO messages (conversation_id, user_id, role, content, tokens, created_at)\nVALUES (\n  '{{ $('Prepare Save').first().json.conversationId }}'::uuid,\n  {{ $('Prepare Save').first().json.userId }},\n  'user',\n  '{{ $('Prepare Save').first().json.message.replace(/'/g, \"''\").replace(/\\\\/g, '\\\\\\\\') }}',\n  {{ Math.ceil($('Prepare Save').first().json.message.length / 4) }},\n  NOW()\n);",
+        "options": {}
+      },
+      "id": "200ae46e-230c-4ab2-ab0d-6d05d0fdc83b",
+      "name": "INSERT User Message",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1296,
+        608
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "OLIR53Szrqirze2J",
+          "name": "WIBOT PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO messages (conversation_id, user_id, role, content, tokens, created_at)\nVALUES (\n  '{{ $('Prepare Save').first().json.conversationId }}'::uuid,\n  {{ $('Prepare Save').first().json.userId }},\n  'assistant',\n  '{{ $('Prepare Save').first().json.response.replace(/'/g, \"''\").replace(/\\\\/g, '\\\\\\\\') }}',\n  {{ Math.ceil($('Prepare Save').first().json.response.length / 4) }},\n  NOW()\n);",
+        "options": {}
+      },
+      "id": "5724d528-248a-4746-803d-b4c5f1c06fa3",
+      "name": "INSERT Assistant Message",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1520,
+        608
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "OLIR53Szrqirze2J",
+          "name": "WIBOT PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO user_token_usage (user_id, month, used_tokens, quota_tokens)\nVALUES (\n  {{ $('Prepare Save').first().json.userId }},\n  DATE_TRUNC('month', CURRENT_DATE),\n  {{ $('Prepare Save').first().json.tokensUsed }},\n  50000\n)\nON CONFLICT (user_id, month)\nDO UPDATE SET used_tokens = user_token_usage.used_tokens + {{ $('Prepare Save').first().json.tokensUsed }};",
+        "options": {}
+      },
+      "id": "46e1df19-e27d-4027-b3a3-6caba5812618",
+      "name": "UPDATE Token Usage",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1744,
+        608
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "OLIR53Szrqirze2J",
+          "name": "WIBOT PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $('Prepare Save').first().json;\n\nreturn [{\n  json: {\n    success: true,\n    response: data.response,\n    tokens_used: data.tokensUsed,\n    tokens_remaining: data.tokensRemaining,\n    conversation_id: data.conversationId\n  }\n}];"
+      },
+      "id": "269b4a59-7df0-4cc1-a076-2a6e82559256",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1968,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "6c17328d-9c6d-40ac-a3d4-47dd9b35e3e4",
+      "name": "Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2192,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "retrieve-as-tool",
+        "toolDescription": "Recherche dans la base de connaissances WIDIP. Utilise cet outil pour trouver :\n- Procédures de résolution (panne internet, reset mot de passe, imprimante)\n- Informations clients (EHPAD, cliniques, contacts, IPs, infrastructures)\n- Historique des tickets résolus\n- Documentation technique\nUtilise toujours cet outil quand l'utilisateur pose une question sur un client, une procédure ou un problème technique.",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.vectorStorePGVector",
+      "typeVersion": 1.3,
+      "position": [
+        496,
+        832
+      ],
+      "id": "9effa8df-c994-4e33-93fa-38de32eb777f",
+      "name": "Postgres PGVector Store",
+      "credentials": {
+        "postgres": {
+          "id": "OLIR53Szrqirze2J",
+          "name": "WIBOT PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.embeddingsMistralCloud",
+      "typeVersion": 1,
+      "position": [
+        560,
+        1040
+      ],
+      "id": "c15d9299-be74-4b25-b73e-6e5d1cfe4443",
+      "name": "Embeddings Mistral Cloud",
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "aoJtaXmparXvnYMd",
+          "name": "Mistral API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "retrieve-as-tool",
+        "toolDescription": "Recherche dans la base de connaissances WIDIP. Utilise cet outil pour trouver :\n- Procédures de résolution (panne internet, reset mot de passe, imprimante)\n- Informations clients (EHPAD, cliniques, contacts, IPs, infrastructures)\n- Historique des tickets résolus\n- Documentation technique\nUtilise toujours cet outil quand l'utilisateur pose une question sur un client, une procédure ou un problème technique.",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.vectorStorePGVector",
+      "typeVersion": 1.3,
+      "position": [
+        480,
+        1648
+      ],
+      "id": "9fff44b1-6800-46ec-bbfd-35a4077202d4",
+      "name": "Postgres PGVector Store1",
+      "credentials": {
+        "postgres": {
+          "id": "OLIR53Szrqirze2J",
+          "name": "WIBOT PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.embeddingsMistralCloud",
+      "typeVersion": 1,
+      "position": [
+        560,
+        1856
+      ],
+      "id": "4b8290a9-86d8-48bd-a1ba-29622eaea121",
+      "name": "Embeddings Mistral Cloud1",
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "aoJtaXmparXvnYMd",
+          "name": "Mistral API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "retrieve-as-tool",
+        "toolDescription": "Recherche dans la base de connaissances WIDIP. Utilise cet outil pour trouver :\n- Procédures de résolution (panne internet, reset mot de passe, imprimante)\n- Informations clients (EHPAD, cliniques, contacts, IPs, infrastructures)\n- Historique des tickets résolus\n- Documentation technique\nUtilise toujours cet outil quand l'utilisateur pose une question sur un client, une procédure ou un problème technique.",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.vectorStorePGVector",
+      "typeVersion": 1.3,
+      "position": [
+        480,
+        224
+      ],
+      "id": "c457f0c9-4133-4d98-9013-5d8803ee7fc1",
+      "name": "Postgres PGVector Store2",
+      "credentials": {
+        "postgres": {
+          "id": "OLIR53Szrqirze2J",
+          "name": "WIBOT PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.embeddingsMistralCloud",
+      "typeVersion": 1,
+      "position": [
+        560,
+        432
+      ],
+      "id": "4ce83ace-00ca-4ff9-9959-bd6a423f3786",
+      "name": "Embeddings Mistral Cloud2",
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "aoJtaXmparXvnYMd",
+          "name": "Mistral API"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook Chat": {
+      "main": [
+        [
+          {
+            "node": "Verify JWT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify JWT": {
+      "main": [
+        [
+          {
+            "node": "JWT Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "JWT Valid?": {
+      "main": [
+        [
+          {
+            "node": "Check Quota",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Unauthorized",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Quota": {
+      "main": [
+        [
+          {
+            "node": "Prepare Quota",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Quota": {
+      "main": [
+        [
+          {
+            "node": "Quota OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quota OK?": {
+      "main": [
+        [
+          {
+            "node": "Mode Switch",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Quota Exceeded",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mode Switch": {
+      "main": [
+        [
+          {
+            "node": "AI Agent Code",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Agent Flash",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Agent Pro",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Agent Flash",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Devstral Code": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent Code",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Memory Code": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent Code",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Devstral Small": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent Flash",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Memory Flash": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent Flash",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mistral Large": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent Pro",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Memory Pro": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent Pro",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent Code": {
+      "main": [
+        [
+          {
+            "node": "Prepare Save",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent Flash": {
+      "main": [
+        [
+          {
+            "node": "Prepare Save",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent Pro": {
+      "main": [
+        [
+          {
+            "node": "Prepare Save",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Save": {
+      "main": [
+        [
+          {
+            "node": "UPSERT Conversation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "UPSERT Conversation": {
+      "main": [
+        [
+          {
+            "node": "INSERT User Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "INSERT User Message": {
+      "main": [
+        [
+          {
+            "node": "INSERT Assistant Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "INSERT Assistant Message": {
+      "main": [
+        [
+          {
+            "node": "UPDATE Token Usage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "UPDATE Token Usage": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Response": {
+      "main": [
+        [
+          {
+            "node": "Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres PGVector Store": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent Flash",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings Mistral Cloud": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Postgres PGVector Store",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings Mistral Cloud1": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Postgres PGVector Store1",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres PGVector Store1": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent Pro",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings Mistral Cloud2": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Postgres PGVector Store2",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres PGVector Store2": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent Code",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "c2f900e0-1ccd-4498-8e04-244f310f833d",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "fea405d08059f6456eb869810813e4a53c89bf16edccc4c93e0b0f95abe6758e"
+  },
+  "id": "sp2cH0pmNysnLPJ4",
+  "tags": [
+    {
+      "updatedAt": "2025-12-29T13:35:28.215Z",
+      "createdAt": "2025-12-29T13:35:28.215Z",
+      "id": "qTmXJ6HhddMdMrG8",
+      "name": "WIBOT"
+    }
+  ]
+}
